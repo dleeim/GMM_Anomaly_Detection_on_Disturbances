@@ -192,7 +192,7 @@ def plot_gmm_1d_feature_overlay(
     mix_pdf = comp_pdfs.sum(axis=0)
 
     # plot
-    plt.figure(figsize=(12, 5))
+    plt.figure()
     plt.hist(x_train, bins=bins, density=True, alpha=0.45, label="Train (normal)")
     if len(x_test):
         plt.hist(x_test, bins=bins, density=True, alpha=0.35, label=test_label)
