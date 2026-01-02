@@ -238,9 +238,10 @@ def main():
     print(f'F1 Score: {f1:.2f}')
 
     # Select feature that you want to visualize how GMM detects disturbances
+    FEATURE_NAME = "XMEAS(3)"
     df_train = pd.read_csv("Data/data_train.csv")
     df_test  = pd.read_csv("Data/data_test.csv")
-    plot_gmm_1d_feature_overlay(df_train, df_test, "XMEAS(3)", model[0], scaler, show_test="anomalies", y_pred=y_pred)
+    plot_gmm_1d_feature_overlay(df_train, df_test, FEATURE_NAME, model[0], scaler, show_test="anomalies", y_pred=y_pred)
 
 
 if __name__ == '__main__':
