@@ -124,9 +124,7 @@ def predict(X, model):
 
 
 def component_variances(gmm):
-    """
-    Return per-component per-feature variances: shape (K, D).
-    """
+    """Return per-component per-feature variances: shape (K, D)."""
     cov_type = gmm.covariance_type
     covs = gmm.covariances_
     K, D = gmm.n_components, gmm.means_.shape[1]
@@ -141,66 +139,77 @@ def component_variances(gmm):
         return np.tile(np.asarray(covs).reshape(-1, 1), (1, D))
     raise ValueError(f"Unknown covariance_type: {cov_type}")
 
+def normal_pdf(x, mu, var):
+    var = np.maximum(var, 1e-12)
+    return (1.0 / np.sqrt(2*np.pi*var)) * np.exp(-0.5 * ((x - mu)**2) / var)
 
-def explain_predicted_anomaly(
-    df_train, df_test,
-    X_train_scaled, X_test_scaled,
-    y_test, y_pred,
-    model,
-    sample_idx=None
+def plot_gmm_1d_feature_overlay(
+    df_train, df_test, feature_name,
+    gmm, scaler,
+    show_test="anomalies",   # "all" | "anomalies" | "pred_anomalies"
+    y_pred=None,
+    bins=60,
+    grid_n=500
 ):
-    gmm, tau = model
+    # feature index
     feature_names = [c for c in df_train.columns if c != "label"]
+    i = feature_names.index(feature_name)
 
-    ll_train = gmm.score_samples(X_train_scaled)
-    ll_test  = gmm.score_samples(X_test_scaled)
+    # data in original units
+    x_train = df_train[feature_name].to_numpy()
+    if show_test == "all":
+        x_test = df_test[feature_name].to_numpy()
+        test_label = "Test (all)"
+    elif show_test == "anomalies":
+        x_test = df_test.loc[df_test["label"] == 1, feature_name].to_numpy()
+        test_label = "Test (label=1 anomalies)"
+    elif show_test == "pred_anomalies":
+        if y_pred is None:
+            raise ValueError("Provide y_pred if show_test='pred_anomalies'")
+        x_test = df_test.loc[np.asarray(y_pred)==1, feature_name].to_numpy()
+        test_label = "Test (predicted anomalies)"
+    else:
+        raise ValueError("show_test must be 'all', 'anomalies', or 'pred_anomalies'")
 
-    # pick a sample that was predicted anomaly
-    if sample_idx is None:
-        candidates = np.where(y_pred == 1)[0]
-        if len(candidates) == 0:
-            # fallback: pick the most abnormal (lowest likelihood) point anyway
-            sample_idx = int(np.argmin(ll_test))
-        else:
-            # pick the strongest anomaly for a clear story
-            sample_idx = int(candidates[np.argmin(ll_test[candidates])])
+    # build plotting grid (original units)
+    lo = np.nanmin(np.concatenate([x_train, x_test])) if len(x_test) else np.nanmin(x_train)
+    hi = np.nanmax(np.concatenate([x_train, x_test])) if len(x_test) else np.nanmax(x_train)
+    pad = 0.05 * (hi - lo + 1e-9)
+    grid = np.linspace(lo - pad, hi + pad, grid_n)
 
-    x = X_test_scaled[sample_idx]
-    ll_x = ll_test[sample_idx]
+    # Convert GMM params (trained in scaled space) back to original units for this feature
+    mu_scaled = gmm.means_[:, i]                      # (K,)
+    var_scaled = component_variances(gmm)[:, i]       # (K,)
+    scale = scaler.scale_[i]
+    mean0 = scaler.mean_[i]
 
-    # component responsibility (regime)
-    resp = gmm.predict_proba(x.reshape(1, -1))[0]
-    k_star = int(np.argmax(resp))
+    mu_raw = mu_scaled * scale + mean0
+    var_raw = var_scaled * (scale**2)
 
-    # per-feature z-scores relative to the selected regime/component
-    mu = gmm.means_[k_star]
-    var = component_variances(gmm)[k_star]
-    z = (x - mu) / np.sqrt(var + 1e-12)
+    # mixture + components in raw space
+    weights = gmm.weights_
+    comp_pdfs = np.array([weights[k] * normal_pdf(grid, mu_raw[k], var_raw[k]) for k in range(gmm.n_components)])
+    mix_pdf = comp_pdfs.sum(axis=0)
 
-    order = np.argsort(np.abs(z))[::-1]
-    top_idx = order[0]
-    top_feats = feature_names[top_idx]
-    top_z = z[top_idx]
+    # plot
+    plt.figure(figsize=(12, 5))
+    plt.hist(x_train, bins=bins, density=True, alpha=0.45, label="Train (normal)")
+    if len(x_test):
+        plt.hist(x_test, bins=bins, density=True, alpha=0.35, label=test_label)
 
-    # ---- PLOTTING ----
-    fig, ax = plt.subplots(1, 1)
+    # each component (weighted)
+    for k in range(gmm.n_components):
+        plt.plot(grid, comp_pdfs[k], linewidth=1, alpha=0.8, label=f"GMM {k+1}")
 
-    # one-feature distribution for the most deviated feature
-    f0 = top_feats
-    x0 = df_test.iloc[sample_idx][f0]
-    ax.hist(df_train[f0].to_numpy(), bins=60, density=True, alpha=0.55, label="Train (normal)")
-    ax.hist(df_test.loc[df_test["label"] == 1, f0].to_numpy(), bins=60, density=True, alpha=0.35, label="Test anomalies (label=1)")
-    ax.axvline(x0, linewidth=2, label=f"Selected value = {x0:.3g}")
-    ax.set_title(f"(C) Most deviated feature: '{f0}' (original scale)")
-    ax.set_xlabel(f0)
-    ax.legend()
+    # total mixture
+    plt.plot(grid, mix_pdf, linewidth=3, label="GMM mixture (train-fit)")
 
+    plt.title(f"1D marginal GMM overlay on feature: {feature_name}")
+    plt.xlabel(f"{feature_name} (original units)")
+    plt.ylabel("density")
+    plt.legend()
     plt.tight_layout()
     plt.show()
-
-    print(f"sample_idx={sample_idx}, label={int(y_test[sample_idx])}, pred={int(y_pred[sample_idx])}, LL={ll_x:.6f}, tau={tau:.6f}")
-
-    return sample_idx, top_feats
 
 
 def main():
@@ -222,14 +231,16 @@ def main():
     recall = recall_score(y_test, y_pred)
     f1 = f1_score(y_test, y_pred)
 
+    print(f'No of component: {model[0].n_components}')
     print(f'Accuracy: {accuracy:.2f}')
     print(f'Precision: {precision:.2f}')
     print(f'Recall: {recall:.2f}')
     print(f'F1 Score: {f1:.2f}')
 
+    # Select feature that you want to visualize how GMM detects disturbances
     df_train = pd.read_csv("Data/data_train.csv")
     df_test  = pd.read_csv("Data/data_test.csv")
-    idx, feat = explain_predicted_anomaly(df_train, df_test, X_train_scaled, X_test_scaled, y_test, y_pred, model)
+    plot_gmm_1d_feature_overlay(df_train, df_test, "XMEAS(3)", model[0], scaler, show_test="anomalies", y_pred=y_pred)
 
 
 if __name__ == '__main__':
