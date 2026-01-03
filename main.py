@@ -199,7 +199,7 @@ def plot_gmm_1d_feature_overlay(
 
     # each component (weighted)
     for k in range(gmm.n_components):
-        plt.plot(grid, comp_pdfs[k], linewidth=1, alpha=0.8, label=f"GMM {k+1}")
+        plt.plot(grid, comp_pdfs[k], linewidth=1, alpha=0.8, label=f"Gaussian {k+1}")
 
     # total mixture
     plt.plot(grid, mix_pdf, linewidth=3, label="GMM mixture (train-fit)")
